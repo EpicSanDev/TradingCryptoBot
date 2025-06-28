@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 from .config import Config
+from .money_management import MoneyManager
 try:
     from .indicators import TechnicalIndicators
 except ImportError:
@@ -18,6 +19,7 @@ class TradingStrategy:
             kraken_client: Instance du client Kraken
         """
         self.kraken_client = kraken_client
+        self.money_manager = MoneyManager(kraken_client)
         self.positions = []
         self.trade_history = []
         self.last_analysis = None
@@ -149,22 +151,28 @@ class TradingStrategy:
                 'confidence': 1 - signal_strength
             }
     
-    def calculate_position_size(self, current_price, available_balance):
+    def calculate_position_size(self, pair, current_price, signal_strength=0.5):
         """
-        Calculer la taille de position optimale
+        Calculer la taille de position optimale en utilisant le MoneyManager
         
         Args:
+            pair (str): Paire de trading
             current_price (float): Prix actuel
-            available_balance (float): Solde disponible
+            signal_strength (float): Force du signal (0-1)
             
         Returns:
             float: Taille de position en volume
         """
-        # Utiliser le pourcentage maximum défini dans la config
-        max_amount = available_balance * Config.MAX_POSITION_SIZE
+        # Calculer le stop-loss pour utiliser avec le MoneyManager
+        stop_loss_price = current_price * (1 - Config.get_stop_loss_for_pair(pair) / 100)
         
-        # Calculer le volume basé sur le prix actuel
-        volume = max_amount / current_price
+        # Utiliser le MoneyManager pour calculer la taille de position
+        position_value = self.money_manager.calculate_position_size(
+            pair, signal_strength, current_price, stop_loss_price
+        )
+        
+        # Convertir la valeur en volume
+        volume = position_value / current_price
         
         return volume
     
@@ -183,11 +191,30 @@ class TradingStrategy:
         
         # Vérifier la confiance du signal
         confidence = analysis['recommendation'].get('confidence', 0)
-        if confidence < 0.4:
+        if confidence < Config.MIN_SIGNAL_CONFIDENCE:
             return False
         
         # Vérifier si on a déjà une position ouverte
         if self.has_open_position(analysis['pair']):
+            return False
+        
+        # Calculer la taille de position proposée pour vérifier les limites de risque
+        pair = analysis['pair']
+        current_price = analysis['current_price']
+        stop_loss_price = current_price * (1 - Config.get_stop_loss_for_pair(pair) / 100)
+        
+        position_value = self.money_manager.calculate_position_size(
+            pair, confidence, current_price, stop_loss_price
+        )
+        
+        # Vérifier les limites de risque avec le MoneyManager
+        if not self.money_manager.check_risk_limits(pair, position_value):
+            print(f"Limites de risque dépassées pour {pair}")
+            return False
+        
+        # Vérifier si l'exposition doit être réduite
+        if self.money_manager.should_reduce_exposure():
+            print("Exposition réduite en raison du drawdown")
             return False
         
         return True
@@ -207,7 +234,7 @@ class TradingStrategy:
         
         # Vérifier la confiance du signal
         confidence = analysis['recommendation'].get('confidence', 0)
-        if confidence < 0.4:
+        if confidence < Config.MIN_SIGNAL_CONFIDENCE:
             return False
         
         # Vérifier si on a une position ouverte à vendre
@@ -265,29 +292,15 @@ class TradingStrategy:
         try:
             current_price = analysis['current_price']
             
-            # Obtenir le solde disponible
-            balance = self.kraken_client.get_account_balance()
-            if balance is None or balance.empty:
-                print("Impossible d'obtenir le solde du compte ou compte vide")
+            # Vérifier la disponibilité des fonds via le MoneyManager
+            effective_capital = self.money_manager.get_effective_capital()
+            if effective_capital <= 0:
+                print("Solde insuffisant ou impossible d'obtenir le solde du compte")
                 return False
             
-            # Trouver le solde de la devise de base (ex: EUR pour XXBTZEUR)
-            base_currency = pair[4:] if len(pair) > 4 else 'EUR'
-            available_balance = 0
-            
-            # Vérifier si le DataFrame a des données
-            if not balance.empty and base_currency in balance.index:
-                available_balance = float(balance.loc[base_currency, 'vol'])
-            else:
-                print(f"Devise {base_currency} non trouvée dans le solde")
-                return False
-            
-            if available_balance < Config.INVESTMENT_AMOUNT:
-                print(f"Solde insuffisant: {available_balance} {base_currency}")
-                return False
-            
-            # Calculer la taille de position
-            volume = self.calculate_position_size(current_price, Config.INVESTMENT_AMOUNT)
+            # Calculer la taille de position en utilisant la force du signal
+            signal_strength = analysis['recommendation'].get('confidence', 0.5)
+            volume = self.calculate_position_size(pair, current_price, signal_strength)
             
             # Placer l'ordre d'achat
             order = self.kraken_client.place_market_buy_order(pair, volume)
@@ -352,6 +365,18 @@ class TradingStrategy:
                 
                 position['profit_loss'] = profit_loss
                 position['profit_loss_percent'] = profit_loss_percent
+                
+                # Mettre à jour le MoneyManager avec le trade
+                trade_data = {
+                    'pair': pair,
+                    'action': 'sell',
+                    'volume': position['volume'],
+                    'price': current_price,
+                    'entry_price': position['price'],
+                    'profit_loss': profit_loss,
+                    'timestamp': datetime.now()
+                }
+                self.money_manager.add_trade(trade_data)
                 
                 print(f"Ordre de vente exécuté: {position['volume']} {pair[:4]} à {current_price}")
                 print(f"Profit/Perte: {profit_loss:.2f} ({profit_loss_percent:.2f}%)")
