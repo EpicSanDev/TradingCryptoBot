@@ -2,7 +2,10 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 from .config import Config
-from .indicators import TechnicalIndicators
+try:
+    from .indicators import TechnicalIndicators
+except ImportError:
+    from .indicators_pandas import TechnicalIndicatorsPandas as TechnicalIndicators
 
 class TradingStrategy:
     """Stratégie de trading avec gestion des risques"""

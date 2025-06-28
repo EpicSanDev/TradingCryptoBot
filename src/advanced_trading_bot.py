@@ -18,7 +18,10 @@ from .config import Config
 from .advanced_kraken_client import AdvancedKrakenClient
 from .money_management import MoneyManager
 from .strategy import TradingStrategy
-from .indicators import TechnicalIndicators
+try:
+    from .indicators import TechnicalIndicators
+except ImportError:
+    from .indicators_pandas import TechnicalIndicatorsPandas as TechnicalIndicators
 
 class AdvancedTradingBot:
     """Bot de trading avancé multi-paire"""
@@ -67,7 +70,6 @@ class AdvancedTradingBot:
             # Initialiser les autres composants
             self.money_manager = MoneyManager()
             self.strategy = TradingStrategy(self.active_client)
-            self.indicators = TechnicalIndicators()
             
             logging.info("Tous les composants initialisés avec succès")
             
@@ -184,7 +186,8 @@ class AdvancedTradingBot:
                 return None
             
             # Calculer les indicateurs techniques
-            indicators = self.indicators.calculate_all_indicators(ohlc_data)
+            indicators_obj = TechnicalIndicators(ohlc_data)
+            indicators = indicators_obj.get_latest_indicators()
             
             # Obtenir le prix actuel
             current_price = self.active_client.get_current_price(pair)
