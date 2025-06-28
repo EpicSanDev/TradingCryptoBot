@@ -2,19 +2,21 @@
 # ===============================================
 
 # API Kraken
-krakenex==2.1.0
-pykrakenapi==0.3.1
+krakenex>=2.1.0
+pykrakenapi>=0.1.8
 
 # Analyse de données - Versions compatibles
-pandas==2.0.3
-numpy==1.24.3
+pandas>=1.3.0
+numpy>=1.21.0
+ta-lib>=0.4.19
+scikit-learn>=0.24.2
 
 # Indicateurs techniques
 pandas-ta>=0.3.14b0
 scipy>=1.9.0
 
 # Planification et timing
-schedule>=1.2.0
+schedule>=1.1.0
 
 # Configuration et variables d'environnement
 python-dotenv>=0.19.0
@@ -30,10 +32,30 @@ plotly>=5.10.0
 requests>=2.28.0
 
 # Tests
-pytest>=7.0.0
-pytest-mock>=3.8.0
+pytest>=6.2.5
+pytest-cov>=3.0.0
 
 # Développement
-black>=22.0.0
-flake8>=4.0.0
-mypy>=0.950 
+black>=21.9b0
+flake8>=3.9.2
+mypy>=0.910
+
+# Documentation
+sphinx>=4.2.0
+sphinx-rtd-theme>=0.5.2
+
+# Security
+cryptography>=35.0.0
+
+# Performance
+numba>=0.54.1
+cython>=0.29.24
+
+# Development
+ipython>=7.28.0
+
+# Web interface
+flask>=2.3.0
+flask-socketio>=5.3.0
+flask-cors>=4.0.0
+python-socketio>=5.9.0 

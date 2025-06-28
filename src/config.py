@@ -46,11 +46,13 @@ class Config:
     # === MONEY MANAGEMENT AVANCÉ ===
     POSITION_SIZING_METHOD = os.getenv('POSITION_SIZING_METHOD', 'kelly')  # 'fixed', 'kelly', 'martingale'
     MAX_RISK_PER_TRADE = float(os.getenv('MAX_RISK_PER_TRADE', '2'))  # % du capital
+    RISK_PER_TRADE = float(os.getenv('MAX_RISK_PER_TRADE', '2'))  # Alias pour compatibilité
     MAX_CORRELATED_RISK = float(os.getenv('MAX_CORRELATED_RISK', '5'))  # % du capital
     MAX_DRAWDOWN = float(os.getenv('MAX_DRAWDOWN', '20'))  # % du capital
     DRAWDOWN_REDUCTION = float(os.getenv('DRAWDOWN_REDUCTION', '0.5'))  # Facteur de réduction
     KELLY_FRACTION = float(os.getenv('KELLY_FRACTION', '0.25'))  # Fraction Kelly à utiliser
     MIN_SIGNAL_CONFIDENCE = float(os.getenv('MIN_SIGNAL_CONFIDENCE', '0.6'))
+    MAX_POSITIONS = int(os.getenv('MAX_POSITIONS', '5'))  # Nombre max de positions simultanées
     
     # === CONFIGURATION FUTURES ===
     MAX_LEVERAGE = float(os.getenv('MAX_LEVERAGE', '10'))
@@ -81,6 +83,21 @@ class Config:
     CACHE_DURATION = int(os.getenv('CACHE_DURATION', '60'))  # Durée du cache en secondes
     MIN_API_INTERVAL = int(os.getenv('MIN_API_INTERVAL', '3'))  # Intervalle minimum entre appels API
     DEBUG_MODE = os.getenv('DEBUG_MODE', 'false').lower() == 'true'
+    
+    # === NOTIFICATIONS ===
+    NOTIFICATIONS_ENABLED = os.getenv('NOTIFICATIONS_ENABLED', 'false').lower() == 'true'
+    EMAIL_NOTIFICATIONS = os.getenv('EMAIL_NOTIFICATIONS', 'false').lower() == 'true'
+    WEBHOOK_NOTIFICATIONS = os.getenv('WEBHOOK_NOTIFICATIONS', 'false').lower() == 'true'
+    
+    # Configuration Email
+    SMTP_SERVER = os.getenv('SMTP_SERVER', 'smtp.gmail.com')
+    SMTP_PORT = int(os.getenv('SMTP_PORT', '587'))
+    EMAIL_FROM = os.getenv('EMAIL_FROM', '')
+    EMAIL_TO = os.getenv('EMAIL_TO', '')
+    EMAIL_PASSWORD = os.getenv('EMAIL_PASSWORD', '')
+    
+    # Configuration Webhook
+    WEBHOOK_URL = os.getenv('WEBHOOK_URL', '')
     
     @classmethod
     def get_spot_credentials(cls) -> dict:
