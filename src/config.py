@@ -29,11 +29,19 @@ class Config:
     STOP_LOSS_PERCENTAGE = float(os.getenv('STOP_LOSS_PERCENTAGE', '5'))
     TAKE_PROFIT_PERCENTAGE = float(os.getenv('TAKE_PROFIT_PERCENTAGE', '10'))
     
+    # === CONFIGURATION TP/SL AUTOMATIQUES ===
+    USE_AUTO_TP_SL = os.getenv('USE_AUTO_TP_SL', 'true').lower() == 'true'
+    RISK_REWARD_RATIO = float(os.getenv('RISK_REWARD_RATIO', '2.0'))  # Ratio 1:2 par défaut
+    AUTO_TP_SL_METHOD = os.getenv('AUTO_TP_SL_METHOD', 'percentage')  # 'percentage' ou 'atr'
+    ATR_MULTIPLIER_TP = float(os.getenv('ATR_MULTIPLIER_TP', '2.0'))
+    ATR_MULTIPLIER_SL = float(os.getenv('ATR_MULTIPLIER_SL', '1.0'))
+    USE_TRAILING_STOP = os.getenv('USE_TRAILING_STOP', 'false').lower() == 'true'
+    TRAILING_STOP_PERCENTAGE = float(os.getenv('TRAILING_STOP_PERCENTAGE', '2.0'))
+    
     # === CONFIGURATION POUR COMPATIBILITÉ ===
     TRADING_PAIR = os.getenv('TRADING_PAIR', 'XXBTZEUR')  # Pour compatibilité avec l'ancien bot
     KRAKEN_API_KEY = os.getenv('SPOT_API_KEY')  # Alias pour compatibilité
     KRAKEN_SECRET_KEY = os.getenv('SPOT_SECRET_KEY')  # Alias pour compatibilité
-    USE_TRAILING_STOP = os.getenv('USE_TRAILING_STOP', 'false').lower() == 'true'
     
     # === MONEY MANAGEMENT AVANCÉ ===
     POSITION_SIZING_METHOD = os.getenv('POSITION_SIZING_METHOD', 'kelly')  # 'fixed', 'kelly', 'martingale'
@@ -69,6 +77,11 @@ class Config:
     # === CONFIGURATION PAR PAIRE ===
     PAIR_CONFIGS = json.loads(os.getenv('PAIR_CONFIGS', '{}'))
     
+    # === OPTIMISATION DES PERFORMANCES ===
+    CACHE_DURATION = int(os.getenv('CACHE_DURATION', '60'))  # Durée du cache en secondes
+    MIN_API_INTERVAL = int(os.getenv('MIN_API_INTERVAL', '3'))  # Intervalle minimum entre appels API
+    DEBUG_MODE = os.getenv('DEBUG_MODE', 'false').lower() == 'true'
+    
     @classmethod
     def get_spot_credentials(cls) -> dict:
         """Obtenir les credentials pour le mode spot"""
@@ -102,6 +115,44 @@ class Config:
         if pair in cls.PAIR_CONFIGS:
             return cls.PAIR_CONFIGS[pair].get('take_profit', cls.TAKE_PROFIT_PERCENTAGE)
         return cls.TAKE_PROFIT_PERCENTAGE
+    
+    @classmethod
+    def calculate_auto_tp_sl_levels(cls, entry_price: float, pair: Optional[str] = None, atr_value: Optional[float] = None) -> dict:
+        """
+        Calculer automatiquement les niveaux de TP et SL basés sur le ratio RR
+        
+        Args:
+            entry_price (float): Prix d'entrée
+            pair (str): Paire de trading (optionnel)
+            atr_value (float): Valeur ATR (optionnel)
+            
+        Returns:
+            dict: Niveaux de TP et SL
+        """
+        if cls.AUTO_TP_SL_METHOD == 'atr' and atr_value:
+            # Méthode basée sur ATR
+            stop_loss = entry_price - (atr_value * cls.ATR_MULTIPLIER_SL)
+            take_profit = entry_price + (atr_value * cls.ATR_MULTIPLIER_TP)
+        else:
+            # Méthode basée sur pourcentage avec ratio RR
+            stop_loss_percent = cls.get_stop_loss_for_pair(pair) if pair else cls.STOP_LOSS_PERCENTAGE
+            take_profit_percent = stop_loss_percent * cls.RISK_REWARD_RATIO
+            
+            stop_loss = entry_price * (1 - stop_loss_percent / 100)
+            take_profit = entry_price * (1 + take_profit_percent / 100)
+        
+        return {
+            'stop_loss': stop_loss,
+            'take_profit': take_profit,
+            'stop_loss_percent': ((entry_price - stop_loss) / entry_price) * 100,
+            'take_profit_percent': ((take_profit - entry_price) / entry_price) * 100,
+            'risk_reward_ratio': cls.RISK_REWARD_RATIO
+        }
+    
+    @classmethod
+    def should_use_auto_tp_sl(cls) -> bool:
+        """Déterminer si on doit utiliser les TP/SL automatiques"""
+        return cls.USE_AUTO_TP_SL
     
     @classmethod
     def get_leverage_for_pair(cls, pair: str) -> float:
@@ -163,6 +214,11 @@ class Config:
         print(f"Stop-loss par défaut: {cls.STOP_LOSS_PERCENTAGE}%")
         print(f"Take-profit par défaut: {cls.TAKE_PROFIT_PERCENTAGE}%")
         print(f"Intervalle de vérification: {cls.CHECK_INTERVAL} minutes")
+        
+        print("\n=== OPTIMISATION DES PERFORMANCES ===")
+        print(f"Durée du cache: {cls.CACHE_DURATION} secondes")
+        print(f"Intervalle minimum API: {cls.MIN_API_INTERVAL} secondes")
+        print(f"Mode debug: {'Activé' if cls.DEBUG_MODE else 'Désactivé'}")
         
         print("\n=== MONEY MANAGEMENT ===")
         print(f"Méthode de sizing: {cls.POSITION_SIZING_METHOD}")

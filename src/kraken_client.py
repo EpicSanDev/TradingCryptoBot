@@ -163,4 +163,116 @@ class KrakenClient:
             return None
         except Exception as e:
             print(f"Erreur lors de la récupération du prix actuel: {e}")
-            return None 
+            return None
+    
+    def place_stop_loss_order(self, pair, volume, stop_price):
+        """
+        Placer un ordre de stop-loss
+        
+        Args:
+            pair (str): Paire de trading
+            volume (float): Volume à vendre
+            stop_price (float): Prix de déclenchement du stop-loss
+            
+        Returns:
+            dict: Résultat de l'ordre ou None en cas d'erreur
+        """
+        try:
+            self._rate_limit()
+            
+            # Utiliser l'API Kraken pour placer un ordre stop-loss
+            # Kraken utilise des ordres stop-loss avec type 'stop-loss'
+            order_params = {
+                'pair': pair,
+                'type': 'sell',
+                'ordertype': 'stop-loss',
+                'volume': str(volume),
+                'price': str(stop_price),
+                'oflags': 'post'  # Ordre post-only pour éviter l'exécution immédiate
+            }
+            
+            result = self.api.query_private('AddOrder', order_params)
+            
+            if result['error']:
+                print(f"Erreur lors du placement de l'ordre stop-loss: {result['error']}")
+                return None
+            
+            print(f"Ordre stop-loss placé: {result}")
+            return result
+            
+        except Exception as e:
+            print(f"Erreur lors du placement de l'ordre stop-loss: {e}")
+            return None
+    
+    def place_take_profit_order(self, pair, volume, take_profit_price):
+        """
+        Placer un ordre de take-profit
+        
+        Args:
+            pair (str): Paire de trading
+            volume (float): Volume à vendre
+            take_profit_price (float): Prix de take-profit
+            
+        Returns:
+            dict: Résultat de l'ordre ou None en cas d'erreur
+        """
+        try:
+            self._rate_limit()
+            
+            # Utiliser un ordre limité pour le take-profit
+            order_params = {
+                'pair': pair,
+                'type': 'sell',
+                'ordertype': 'limit',
+                'volume': str(volume),
+                'price': str(take_profit_price),
+                'oflags': 'post'  # Ordre post-only pour éviter l'exécution immédiate
+            }
+            
+            result = self.api.query_private('AddOrder', order_params)
+            
+            if result['error']:
+                print(f"Erreur lors du placement de l'ordre take-profit: {result['error']}")
+                return None
+            
+            print(f"Ordre take-profit placé: {result}")
+            return result
+            
+        except Exception as e:
+            print(f"Erreur lors du placement de l'ordre take-profit: {e}")
+            return None
+    
+    def cancel_all_orders_for_pair(self, pair):
+        """
+        Annuler tous les ordres pour une paire spécifique
+        
+        Args:
+            pair (str): Paire de trading
+            
+        Returns:
+            bool: True si les ordres ont été annulés avec succès
+        """
+        try:
+            self._rate_limit()
+            
+            # Obtenir tous les ordres ouverts
+            open_orders = self.get_open_orders()
+            
+            if open_orders is None or open_orders.empty:
+                return True
+            
+            # Filtrer les ordres pour la paire spécifique
+            pair_orders = open_orders[open_orders.index.str.contains(pair, na=False)]
+            
+            cancelled_count = 0
+            for order_id in pair_orders.index:
+                result = self.cancel_order(order_id)
+                if result:
+                    cancelled_count += 1
+            
+            print(f"{cancelled_count} ordres annulés pour {pair}")
+            return cancelled_count > 0
+            
+        except Exception as e:
+            print(f"Erreur lors de l'annulation des ordres: {e}")
+            return False 

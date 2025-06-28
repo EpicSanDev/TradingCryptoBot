@@ -68,7 +68,7 @@ class AdvancedTradingBot:
                 self.active_client = self.spot_client
             
             # Initialiser les autres composants
-            self.money_manager = MoneyManager()
+            self.money_manager = MoneyManager(self.active_client)
             self.strategy = TradingStrategy(self.active_client)
             
             logging.info("Tous les composants initialisés avec succès")
@@ -84,7 +84,7 @@ class AdvancedTradingBot:
             
             # Vérifier la connexion
             balance = self.active_client.get_account_balance()
-            if not balance:
+            if balance is None:
                 raise Exception("Impossible de se connecter à Kraken")
             
             logging.info("Connexion à Kraken établie")
@@ -182,7 +182,9 @@ class AdvancedTradingBot:
         try:
             # Obtenir les données OHLC
             ohlc_data = self.active_client.get_ohlc_data(pair, interval=1)
-            if ohlc_data is None or ohlc_data.empty:
+            if ohlc_data is None:
+                return None
+            if hasattr(ohlc_data, 'empty') and ohlc_data.empty:
                 return None
             
             # Calculer les indicateurs techniques
@@ -196,7 +198,7 @@ class AdvancedTradingBot:
             
             # Analyser avec la stratégie
             analysis = self.strategy.analyze_market(pair)
-            if not analysis:
+            if analysis is None:
                 return None
             
             # Ajouter les indicateurs calculés
@@ -473,6 +475,7 @@ class AdvancedTradingBot:
     def _log_global_summary(self):
         """Afficher le résumé global des performances"""
         metrics = self.money_manager.get_performance_metrics()
+        balance_summary = self.money_manager.get_balance_summary()
         
         logging.info("=== RÉSUMÉ GLOBAL DES PERFORMANCES ===")
         logging.info(f"Mode de trading: {self.trading_mode}")
@@ -481,6 +484,14 @@ class AdvancedTradingBot:
         logging.info(f"Profit/Perte total: {metrics['total_profit_loss']:.2f}")
         logging.info(f"Drawdown actuel: {metrics['current_drawdown']:.2f}%")
         logging.info(f"Ratio de Sharpe: {metrics['sharpe_ratio']:.2f}")
+        
+        logging.info("\n=== SOLDE DU COMPTE ===")
+        logging.info(f"Solde réel du compte: {balance_summary['account_balance']:.2f} EUR")
+        logging.info(f"Capital effectif utilisé: {balance_summary['effective_capital']:.2f} EUR")
+        logging.info(f"Capital configuré: {balance_summary['configured_capital']:.2f} EUR")
+        logging.info(f"Utilisation du capital: {balance_summary['capital_utilization']:.1f}%")
+        if balance_summary['last_update']:
+            logging.info(f"Dernière mise à jour: {balance_summary['last_update'].strftime('%H:%M:%S')}")
         
         # Afficher les positions ouvertes
         if self.positions:

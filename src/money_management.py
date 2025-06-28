@@ -15,14 +15,118 @@ from .config import Config
 class MoneyManager:
     """Gestionnaire avancé du money management"""
     
-    def __init__(self):
-        """Initialiser le gestionnaire de money management"""
+    def __init__(self, kraken_client=None):
+        """
+        Initialiser le gestionnaire de money management
+        
+        Args:
+            kraken_client: Instance du client Kraken pour récupérer le solde
+        """
+        self.kraken_client = kraken_client
         self.trade_history = []
         self.current_drawdown = 0.0
         self.peak_balance = Config.TOTAL_CAPITAL
         self.current_balance = Config.TOTAL_CAPITAL
+        self.account_balance = Config.TOTAL_CAPITAL  # Solde réel du compte
+        self.available_balance = Config.TOTAL_CAPITAL  # Solde disponible pour trading
         self.position_sizes = {}
         self.correlation_matrix = {}
+        self.last_balance_update = None
+        
+    def update_account_balance(self) -> bool:
+        """
+        Mettre à jour le solde du compte depuis Kraken
+        
+        Returns:
+            True si la mise à jour a réussi
+        """
+        if not self.kraken_client:
+            return False
+        
+        try:
+            # Récupérer le solde du compte
+            balance_df = self.kraken_client.get_account_balance()
+            
+            if balance_df is None or balance_df.empty:
+                return False
+            
+            # Calculer le solde total en EUR/USD
+            total_balance = 0.0
+            total_available = 0.0
+            
+            for asset, row in balance_df.iterrows():
+                amount = row.iloc[0] if hasattr(row, 'iloc') else row
+                if isinstance(amount, (int, float)) and amount > 0:
+                    # Convertir en EUR si possible (simplifié)
+                    if asset in ['ZEUR', 'EUR']:
+                        total_balance += amount
+                        total_available += amount
+                    elif asset in ['ZUSD', 'USD']:
+                        # Conversion approximative USD -> EUR (devrait utiliser le taux de change réel)
+                        total_balance += amount * 0.85  
+                        total_available += amount * 0.85
+                    elif asset == 'XXBT':  # Bitcoin
+                        # Obtenir le prix actuel du BTC
+                        btc_price = self.kraken_client.get_current_price('XXBTZEUR')
+                        if btc_price:
+                            total_balance += amount * btc_price
+                            total_available += amount * btc_price
+                    elif asset == 'XETH':  # Ethereum
+                        # Obtenir le prix actuel de l'ETH
+                        eth_price = self.kraken_client.get_current_price('XETHZEUR')
+                        if eth_price:
+                            total_balance += amount * eth_price
+                            total_available += amount * eth_price
+                    # Ajouter d'autres cryptos si nécessaire
+            
+            # Mettre à jour les soldes
+            old_balance = self.account_balance
+            self.account_balance = total_balance
+            self.available_balance = total_available
+            self.last_balance_update = datetime.now()
+            
+            # Mettre à jour le peak balance si nécessaire
+            if self.account_balance > self.peak_balance:
+                self.peak_balance = self.account_balance
+                self.current_drawdown = 0.0
+            else:
+                self.current_drawdown = ((self.peak_balance - self.account_balance) / 
+                                       self.peak_balance) * 100
+            
+            # Log de la mise à jour
+            if abs(old_balance - self.account_balance) > 0.01:
+                from .trading_bot import logging  # Import local pour éviter les cycles
+                logging.info(f"Solde du compte mis à jour: {self.account_balance:.2f} EUR "
+                           f"(disponible: {self.available_balance:.2f} EUR)")
+            
+            return True
+            
+        except Exception as e:
+            from .trading_bot import logging  # Import local
+            logging.error(f"Erreur lors de la mise à jour du solde: {e}")
+            return False
+    
+    def get_effective_capital(self) -> float:
+        """
+        Obtenir le capital effectif à utiliser pour les calculs
+        
+        Returns:
+            Capital effectif en tenant compte des préférences et du solde réel
+        """
+        # Si on n'a pas de client Kraken, utiliser la config
+        if not self.kraken_client:
+            return Config.TOTAL_CAPITAL
+        
+        # Mettre à jour le solde si c'est la première fois ou si c'est ancien
+        if (self.last_balance_update is None or 
+            datetime.now() - self.last_balance_update > timedelta(minutes=30)):
+            self.update_account_balance()
+        
+        # Utiliser le minimum entre le solde configuré et le solde réel
+        # Cela permet de limiter l'exposition même si le compte a plus de fonds
+        effective_capital = min(Config.TOTAL_CAPITAL, self.available_balance)
+        
+        return max(effective_capital, 0.0)  # Assurer que c'est positif
         
     def calculate_position_size(self, pair: str, signal_strength: float, 
                               current_price: float, stop_loss_price: float) -> float:
@@ -50,9 +154,10 @@ class MoneyManager:
             return self._fixed_position_sizing(pair)
     
     def _fixed_position_sizing(self, pair: str) -> float:
-        """Taille de position fixe basée sur l'allocation"""
+        """Taille de position fixe basée sur l'allocation et le capital effectif"""
+        effective_capital = self.get_effective_capital()
         allocation = Config.get_allocation_for_pair(pair)
-        position_value = (Config.TOTAL_CAPITAL * allocation / 100) * Config.FIXED_POSITION_SIZE
+        position_value = (effective_capital * allocation / 100) * Config.FIXED_POSITION_SIZE
         return position_value
     
     def _kelly_position_sizing(self, pair: str, signal_strength: float, 
@@ -101,9 +206,10 @@ class MoneyManager:
         return min(base_size * multiplier, base_size * 3)  # Limite à 3x
     
     def _get_max_position_size(self, pair: str) -> float:
-        """Obtenir la taille maximale de position pour une paire"""
+        """Obtenir la taille maximale de position pour une paire basée sur le capital effectif"""
+        effective_capital = self.get_effective_capital()
         allocation = Config.get_allocation_for_pair(pair)
-        max_risk_amount = Config.TOTAL_CAPITAL * (Config.MAX_RISK_PER_TRADE / 100)
+        max_risk_amount = effective_capital * (Config.MAX_RISK_PER_TRADE / 100)
         
         # Ajuster selon le levier pour les futures
         leverage = Config.get_leverage_for_pair(pair)
@@ -157,7 +263,8 @@ class MoneyManager:
         )
         
         total_correlated_risk += position_size
-        max_correlated_risk = Config.TOTAL_CAPITAL * (Config.MAX_CORRELATED_RISK / 100)
+        effective_capital = self.get_effective_capital()
+        max_correlated_risk = effective_capital * (Config.MAX_CORRELATED_RISK / 100)
         
         return total_correlated_risk > max_correlated_risk
     
@@ -299,5 +406,29 @@ class MoneyManager:
             'total_profit_loss': total_profit_loss,
             'average_profit_loss': average_profit_loss,
             'current_drawdown': self.current_drawdown,
-            'sharpe_ratio': sharpe_ratio
+            'sharpe_ratio': sharpe_ratio,
+            'account_balance': self.account_balance,
+            'available_balance': self.available_balance,
+            'effective_capital': self.get_effective_capital()
+        }
+    
+    def get_balance_summary(self) -> Dict:
+        """
+        Obtenir un résumé du solde du compte
+        
+        Returns:
+            Dictionnaire avec les informations de solde
+        """
+        # Mettre à jour le solde si nécessaire
+        if (self.last_balance_update is None or 
+            datetime.now() - self.last_balance_update > timedelta(minutes=5)):
+            self.update_account_balance()
+        
+        return {
+            'account_balance': self.account_balance,
+            'available_balance': self.available_balance,
+            'effective_capital': self.get_effective_capital(),
+            'configured_capital': Config.TOTAL_CAPITAL,
+            'last_update': self.last_balance_update,
+            'capital_utilization': (self.get_effective_capital() / Config.TOTAL_CAPITAL * 100) if Config.TOTAL_CAPITAL > 0 else 0
         } 

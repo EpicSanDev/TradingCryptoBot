@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 from .config import Config
+from .money_management import MoneyManager
 try:
     from .indicators import TechnicalIndicators
 except ImportError:
@@ -18,6 +19,7 @@ class TradingStrategy:
             kraken_client: Instance du client Kraken
         """
         self.kraken_client = kraken_client
+        self.money_manager = MoneyManager(kraken_client)
         self.positions = []
         self.trade_history = []
         self.last_analysis = None
@@ -35,7 +37,9 @@ class TradingStrategy:
         try:
             # Récupérer les données OHLC
             ohlc_data = self.kraken_client.get_ohlc_data(pair)
-            if ohlc_data is None or ohlc_data.empty:
+            if ohlc_data is None:
+                return None
+            if hasattr(ohlc_data, 'empty') and ohlc_data.empty:
                 return None
             
             # Calculer les indicateurs techniques
@@ -149,22 +153,28 @@ class TradingStrategy:
                 'confidence': 1 - signal_strength
             }
     
-    def calculate_position_size(self, current_price, available_balance):
+    def calculate_position_size(self, pair, current_price, signal_strength=0.5):
         """
-        Calculer la taille de position optimale
+        Calculer la taille de position optimale en utilisant le MoneyManager
         
         Args:
+            pair (str): Paire de trading
             current_price (float): Prix actuel
-            available_balance (float): Solde disponible
+            signal_strength (float): Force du signal (0-1)
             
         Returns:
             float: Taille de position en volume
         """
-        # Utiliser le pourcentage maximum défini dans la config
-        max_amount = available_balance * Config.MAX_POSITION_SIZE
+        # Calculer le stop-loss pour utiliser avec le MoneyManager
+        stop_loss_price = current_price * (1 - Config.get_stop_loss_for_pair(pair) / 100)
         
-        # Calculer le volume basé sur le prix actuel
-        volume = max_amount / current_price
+        # Utiliser le MoneyManager pour calculer la taille de position
+        position_value = self.money_manager.calculate_position_size(
+            pair, signal_strength, current_price, stop_loss_price
+        )
+        
+        # Convertir la valeur en volume
+        volume = position_value / current_price
         
         return volume
     
@@ -183,11 +193,30 @@ class TradingStrategy:
         
         # Vérifier la confiance du signal
         confidence = analysis['recommendation'].get('confidence', 0)
-        if confidence < 0.4:
+        if confidence < Config.MIN_SIGNAL_CONFIDENCE:
             return False
         
         # Vérifier si on a déjà une position ouverte
         if self.has_open_position(analysis['pair']):
+            return False
+        
+        # Calculer la taille de position proposée pour vérifier les limites de risque
+        pair = analysis['pair']
+        current_price = analysis['current_price']
+        stop_loss_price = current_price * (1 - Config.get_stop_loss_for_pair(pair) / 100)
+        
+        position_value = self.money_manager.calculate_position_size(
+            pair, confidence, current_price, stop_loss_price
+        )
+        
+        # Vérifier les limites de risque avec le MoneyManager
+        if not self.money_manager.check_risk_limits(pair, position_value):
+            print(f"Limites de risque dépassées pour {pair}")
+            return False
+        
+        # Vérifier si l'exposition doit être réduite
+        if self.money_manager.should_reduce_exposure():
+            print("Exposition réduite en raison du drawdown")
             return False
         
         return True
@@ -207,7 +236,7 @@ class TradingStrategy:
         
         # Vérifier la confiance du signal
         confidence = analysis['recommendation'].get('confidence', 0)
-        if confidence < 0.4:
+        if confidence < Config.MIN_SIGNAL_CONFIDENCE:
             return False
         
         # Vérifier si on a une position ouverte à vendre
@@ -253,7 +282,7 @@ class TradingStrategy:
     
     def execute_buy_order(self, pair, analysis):
         """
-        Exécuter un ordre d'achat
+        Exécuter un ordre d'achat avec TP/SL automatiques
         
         Args:
             pair (str): Paire de trading
@@ -265,35 +294,40 @@ class TradingStrategy:
         try:
             current_price = analysis['current_price']
             
-            # Obtenir le solde disponible
-            balance = self.kraken_client.get_account_balance()
-            if balance is None or balance.empty:
-                print("Impossible d'obtenir le solde du compte ou compte vide")
+            # Vérifier la disponibilité des fonds via le MoneyManager
+            effective_capital = self.money_manager.get_effective_capital()
+            if effective_capital <= 0:
+                print("Solde insuffisant ou impossible d'obtenir le solde du compte")
                 return False
             
-            # Trouver le solde de la devise de base (ex: EUR pour XXBTZEUR)
-            base_currency = pair[4:] if len(pair) > 4 else 'EUR'
-            available_balance = 0
+            # Calculer la taille de position en utilisant la force du signal
+            signal_strength = analysis['recommendation'].get('confidence', 0.5)
+            volume = self.calculate_position_size(pair, current_price, signal_strength)
             
-            # Vérifier si le DataFrame a des données
-            if not balance.empty and base_currency in balance.index:
-                available_balance = float(balance.loc[base_currency, 'vol'])
-            else:
-                print(f"Devise {base_currency} non trouvée dans le solde")
-                return False
-            
-            if available_balance < Config.INVESTMENT_AMOUNT:
-                print(f"Solde insuffisant: {available_balance} {base_currency}")
-                return False
-            
-            # Calculer la taille de position
-            volume = self.calculate_position_size(current_price, Config.INVESTMENT_AMOUNT)
+            # Calculer les niveaux TP/SL automatiques si activé
+            tp_sl_levels = None
+            if Config.should_use_auto_tp_sl():
+                # Obtenir la valeur ATR si disponible
+                atr_value = None
+                if 'indicators' in analysis and 'atr' in analysis['indicators']:
+                    atr_value = analysis['indicators']['atr']
+                
+                tp_sl_levels = Config.calculate_auto_tp_sl_levels(
+                    entry_price=current_price,
+                    pair=pair,
+                    atr_value=atr_value
+                )
+                
+                print(f"TP/SL automatiques calculés:")
+                print(f"  Stop Loss: {tp_sl_levels['stop_loss']:.6f} ({tp_sl_levels['stop_loss_percent']:.2f}%)")
+                print(f"  Take Profit: {tp_sl_levels['take_profit']:.6f} ({tp_sl_levels['take_profit_percent']:.2f}%)")
+                print(f"  Ratio R/R: 1:{tp_sl_levels['risk_reward_ratio']:.1f}")
             
             # Placer l'ordre d'achat
             order = self.kraken_client.place_market_buy_order(pair, volume)
             
             if order:
-                # Enregistrer le trade
+                # Enregistrer le trade avec les niveaux TP/SL
                 trade = {
                     'timestamp': datetime.now(),
                     'pair': pair,
@@ -303,11 +337,18 @@ class TradingStrategy:
                     'amount': volume * current_price,
                     'order_id': order.get('txid', [None])[0] if order else None,
                     'analysis': analysis,
-                    'sold': False
+                    'sold': False,
+                    'tp_sl_levels': tp_sl_levels,
+                    'auto_tp_sl_enabled': Config.should_use_auto_tp_sl()
                 }
                 
                 self.trade_history.append(trade)
                 print(f"Ordre d'achat exécuté: {volume} {pair[:4]} à {current_price}")
+                
+                # Placer les ordres TP/SL automatiques si activé
+                if tp_sl_levels and Config.should_use_auto_tp_sl():
+                    self._place_auto_tp_sl_orders(pair, volume, tp_sl_levels, trade)
+                
                 return True
             
             return False
@@ -315,6 +356,44 @@ class TradingStrategy:
         except Exception as e:
             print(f"Erreur lors de l'exécution de l'ordre d'achat: {e}")
             return False
+    
+    def _place_auto_tp_sl_orders(self, pair, volume, tp_sl_levels, trade):
+        """
+        Placer automatiquement les ordres de TP et SL
+        
+        Args:
+            pair (str): Paire de trading
+            volume (float): Volume de la position
+            tp_sl_levels (dict): Niveaux de TP et SL
+            trade (dict): Trade associé
+        """
+        try:
+            # Placer l'ordre de stop-loss
+            stop_loss_order = self.kraken_client.place_stop_loss_order(
+                pair, volume, tp_sl_levels['stop_loss']
+            )
+            
+            # Placer l'ordre de take-profit
+            take_profit_order = self.kraken_client.place_take_profit_order(
+                pair, volume, tp_sl_levels['take_profit']
+            )
+            
+            # Enregistrer les ordres dans le trade
+            trade['stop_loss_order'] = stop_loss_order
+            trade['take_profit_order'] = take_profit_order
+            
+            if stop_loss_order:
+                print(f"Ordre Stop-Loss placé à {tp_sl_levels['stop_loss']:.6f}")
+            else:
+                print("Échec du placement de l'ordre Stop-Loss")
+            
+            if take_profit_order:
+                print(f"Ordre Take-Profit placé à {tp_sl_levels['take_profit']:.6f}")
+            else:
+                print("Échec du placement de l'ordre Take-Profit")
+                
+        except Exception as e:
+            print(f"Erreur lors du placement des ordres TP/SL automatiques: {e}")
     
     def execute_sell_order(self, pair, analysis):
         """
@@ -353,6 +432,18 @@ class TradingStrategy:
                 position['profit_loss'] = profit_loss
                 position['profit_loss_percent'] = profit_loss_percent
                 
+                # Mettre à jour le MoneyManager avec le trade
+                trade_data = {
+                    'pair': pair,
+                    'action': 'sell',
+                    'volume': position['volume'],
+                    'price': current_price,
+                    'entry_price': position['price'],
+                    'profit_loss': profit_loss,
+                    'timestamp': datetime.now()
+                }
+                self.money_manager.add_trade(trade_data)
+                
                 print(f"Ordre de vente exécuté: {position['volume']} {pair[:4]} à {current_price}")
                 print(f"Profit/Perte: {profit_loss:.2f} ({profit_loss_percent:.2f}%)")
                 return True
@@ -365,7 +456,7 @@ class TradingStrategy:
     
     def check_stop_loss_take_profit(self, pair, current_price):
         """
-        Vérifier les stop-loss et take-profit
+        Vérifier les stop-loss et take-profit avec support des niveaux automatiques
         
         Args:
             pair (str): Paire de trading
@@ -380,17 +471,34 @@ class TradingStrategy:
         
         buy_price = position['price']
         
-        # Calculer les pourcentages
-        loss_percent = ((current_price - buy_price) / buy_price) * 100
-        profit_percent = ((current_price - buy_price) / buy_price) * 100
+        # Vérifier si les TP/SL automatiques sont activés
+        if position.get('auto_tp_sl_enabled') and position.get('tp_sl_levels'):
+            tp_sl_levels = position['tp_sl_levels']
+            
+            # Vérifier le stop-loss automatique
+            if current_price <= tp_sl_levels['stop_loss']:
+                print(f"Stop-Loss automatique atteint: {current_price} <= {tp_sl_levels['stop_loss']}")
+                return 'SELL'
+            
+            # Vérifier le take-profit automatique
+            if current_price >= tp_sl_levels['take_profit']:
+                print(f"Take-Profit automatique atteint: {current_price} >= {tp_sl_levels['take_profit']}")
+                return 'SELL'
         
-        # Vérifier le stop-loss
-        if loss_percent <= -Config.STOP_LOSS_PERCENTAGE:
-            return 'SELL'  # Stop-loss atteint
-        
-        # Vérifier le take-profit
-        if profit_percent >= Config.TAKE_PROFIT_PERCENTAGE:
-            return 'SELL'  # Take-profit atteint
+        else:
+            # Méthode traditionnelle basée sur les pourcentages
+            loss_percent = ((current_price - buy_price) / buy_price) * 100
+            profit_percent = ((current_price - buy_price) / buy_price) * 100
+            
+            # Vérifier le stop-loss
+            if loss_percent <= -Config.STOP_LOSS_PERCENTAGE:
+                print(f"Stop-Loss traditionnel atteint: {loss_percent:.2f}% <= -{Config.STOP_LOSS_PERCENTAGE}%")
+                return 'SELL'
+            
+            # Vérifier le take-profit
+            if profit_percent >= Config.TAKE_PROFIT_PERCENTAGE:
+                print(f"Take-Profit traditionnel atteint: {profit_percent:.2f}% >= {Config.TAKE_PROFIT_PERCENTAGE}%")
+                return 'SELL'
         
         return 'HOLD'
     

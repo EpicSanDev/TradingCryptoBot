@@ -26,7 +26,9 @@ class AdvancedKrakenClient:
         """
         self.mode = mode
         self.last_api_call = 0
-        self.min_call_interval = 1  # 1 seconde minimum entre les appels
+        self.min_call_interval = Config.MIN_API_INTERVAL  # Utiliser la config
+        self.cache = {}
+        self.cache_duration = Config.CACHE_DURATION  # Utiliser la config
         
         # Initialiser les clients selon le mode
         if mode == 'spot':
@@ -40,44 +42,84 @@ class AdvancedKrakenClient:
         )
         self.kraken = kraken.KrakenAPI(self.api)
         
-        logging.info(f"Client Kraken {mode} initialisé")
+        if Config.DEBUG_MODE:
+            logging.info(f"Client Kraken {mode} initialisé avec cache de {self.cache_duration}s et intervalle API de {self.min_call_interval}s")
+        else:
+            logging.info(f"Client Kraken {mode} initialisé")
         
     def _rate_limit(self):
-        """Respecter les limites de fréquence d'appel API"""
+        """Respecter les limites de fréquence d'appel API avec gestion intelligente"""
         current_time = time.time()
         time_since_last_call = current_time - self.last_api_call
         
         if time_since_last_call < self.min_call_interval:
             sleep_time = self.min_call_interval - time_since_last_call
+            logging.debug(f"Rate limit: attente de {sleep_time:.2f}s")
             time.sleep(sleep_time)
         
         self.last_api_call = time.time()
         
+    def _get_cached_data(self, key: str) -> Optional[Any]:
+        """Récupérer des données en cache si elles sont encore valides"""
+        if key in self.cache:
+            data, timestamp = self.cache[key]
+            if time.time() - timestamp < self.cache_duration:
+                return data
+            else:
+                del self.cache[key]
+        return None
+        
+    def _cache_data(self, key: str, data: Any):
+        """Mettre en cache des données avec timestamp"""
+        self.cache[key] = (data, time.time())
+        
     def get_account_balance(self) -> Optional[pd.DataFrame]:
-        """Obtenir le solde du compte"""
+        """Obtenir le solde du compte avec cache"""
+        cache_key = f"balance_{self.mode}"
+        cached_data = self._get_cached_data(cache_key)
+        if cached_data is not None:
+            return cached_data
+            
         try:
             self._rate_limit()
             balance = self.kraken.get_account_balance()
-            if balance is None or balance.empty:
-                logging.warning("Aucun solde trouvé ou compte vide")
+            if balance is None:
+                logging.warning("Aucun solde trouvé")
                 return pd.DataFrame()
+            if hasattr(balance, 'empty') and balance.empty:
+                logging.warning("Compte vide")
+                return pd.DataFrame()
+            
+            self._cache_data(cache_key, balance)
             return balance
         except Exception as e:
             logging.error(f"Erreur lors de la récupération du solde: {e}")
             return pd.DataFrame()
     
     def get_ticker_info(self, pair: str) -> Optional[pd.DataFrame]:
-        """Obtenir les informations du ticker"""
+        """Obtenir les informations du ticker avec cache"""
+        cache_key = f"ticker_{pair}"
+        cached_data = self._get_cached_data(cache_key)
+        if cached_data is not None:
+            return cached_data
+            
         try:
             self._rate_limit()
             ticker = self.kraken.get_ticker_information(pair)
+            if ticker is not None:
+                self._cache_data(cache_key, ticker)
             return ticker
         except Exception as e:
             logging.error(f"Erreur lors de la récupération du ticker pour {pair}: {e}")
             return None
     
     def get_ohlc_data(self, pair: str, interval: int = 1, since: Optional[datetime] = None) -> Optional[pd.DataFrame]:
-        """Obtenir les données OHLC (Open, High, Low, Close)"""
+        """Obtenir les données OHLC (Open, High, Low, Close) avec cache optimisé"""
+        cache_key = f"ohlc_{pair}_{interval}"
+        cached_data = self._get_cached_data(cache_key)
+        if cached_data is not None:
+            return cached_data
+            
         try:
             self._rate_limit()
             if since is None:
@@ -88,19 +130,58 @@ class AdvancedKrakenClient:
                 interval=interval, 
                 since=since
             )
+            
+            if ohlc is not None:
+                # Cache the data without modifying the frequency to avoid warnings
+                self._cache_data(cache_key, ohlc)
+            
             return ohlc
         except Exception as e:
             logging.error(f"Erreur lors de la récupération des données OHLC pour {pair}: {e}")
             return None
     
     def get_current_price(self, pair: str) -> Optional[float]:
-        """Obtenir le prix actuel d'une paire"""
+        """Obtenir le prix actuel d'une paire avec cache"""
+        cache_key = f"price_{pair}"
+        cached_data = self._get_cached_data(cache_key)
+        if cached_data is not None:
+            return cached_data
+            
         try:
             ticker = self.get_ticker_info(pair)
-            if ticker is not None and not ticker.empty:
-                close_price = ticker['c'][0]
-                return float(close_price)
-            return None
+            if ticker is None:
+                return None
+            if hasattr(ticker, 'empty') and ticker.empty:
+                return None
+            
+            # Handle different possible data structures
+            close_data = ticker['c']
+            if isinstance(close_data, list):
+                close_price = close_data[0]
+            elif hasattr(close_data, 'iloc'):
+                close_price = close_data.iloc[0]
+            else:
+                close_price = close_data
+            
+            # Ensure we have a valid number
+            if isinstance(close_price, (list, tuple)):
+                close_price = close_price[0]
+            
+            # Convert to float safely
+            try:
+                if isinstance(close_price, (int, float)):
+                    price = float(close_price)
+                elif isinstance(close_price, str):
+                    price = float(close_price)
+                else:
+                    logging.error(f"Type de prix non supporté: {type(close_price)}")
+                    return None
+                    
+                self._cache_data(cache_key, price)
+                return price
+            except (ValueError, TypeError):
+                logging.error(f"Impossible de convertir le prix en float: {close_price}")
+                return None
         except Exception as e:
             logging.error(f"Erreur lors de la récupération du prix pour {pair}: {e}")
             return None
@@ -134,15 +215,15 @@ class AdvancedKrakenClient:
             if self.mode == 'futures' and leverage:
                 order_params['leverage'] = str(leverage)
             
-            # Placer l'ordre
+            # Placer l'ordre en utilisant l'API directe
             if side == 'buy':
-                result = self.kraken.create_market_buy_order(pair, volume)
+                result = self.api.query_private('AddOrder', order_params)
             else:
-                result = self.kraken.create_market_sell_order(pair, volume)
+                result = self.api.query_private('AddOrder', order_params)
             
-            if result:
+            if result and 'error' not in result:
                 order_info = {
-                    'txid': result.get('txid', []),
+                    'txid': result.get('result', {}).get('txid', []),
                     'pair': pair,
                     'side': side,
                     'volume': volume,
@@ -191,15 +272,12 @@ class AdvancedKrakenClient:
             if self.mode == 'futures' and leverage:
                 order_params['leverage'] = str(leverage)
             
-            # Placer l'ordre
-            if side == 'buy':
-                result = self.kraken.create_limit_buy_order(pair, volume, price)
-            else:
-                result = self.kraken.create_limit_sell_order(pair, volume, price)
+            # Placer l'ordre en utilisant l'API directe
+            result = self.api.query_private('AddOrder', order_params)
             
-            if result:
+            if result and 'error' not in result:
                 order_info = {
-                    'txid': result.get('txid', []),
+                    'txid': result.get('result', {}).get('txid', []),
                     'pair': pair,
                     'side': side,
                     'volume': volume,
