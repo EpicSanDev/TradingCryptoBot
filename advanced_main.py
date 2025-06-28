@@ -60,6 +60,9 @@ def interactive_mode(bot):
     print("  positions            - Positions actuelles")
     print("  performance          - Performance détaillée")
     print("  pairs                - Liste des paires configurées")
+    print("  capital              - Informations sur le capital")
+    print("  update_capital       - Forcer la mise à jour du capital")
+    print("  recommendations      - Recommandations de taille de position")
     print("  quit                 - Quitter")
     
     while True:
@@ -162,6 +165,53 @@ def interactive_mode(bot):
                             print(f"    Levier: {config['leverage']}x")
                         if 'allocation' in config:
                             print(f"    Allocation: {config['allocation']}%")
+            elif cmd == 'capital':
+                capital_info = bot.money_manager.get_capital_info()
+                print("\n=== INFORMATIONS SUR LE CAPITAL ===")
+                print(f"Capital statique configuré: {capital_info['static_capital']:.2f} {capital_info['capital_currency']}")
+                print(f"Capital disponible (dynamique): {capital_info['available_capital']:.2f} {capital_info['capital_currency']}")
+                print(f"Solde actuel du bot: {capital_info['current_balance']:.2f} {capital_info['capital_currency']}")
+                print(f"Pic historique: {capital_info['peak_balance']:.2f} {capital_info['capital_currency']}")
+                print(f"Adaptation automatique: {'✅ Activée' if capital_info['auto_update_enabled'] else '❌ Désactivée'}")
+                
+                if capital_info['last_update']:
+                    import datetime
+                    time_since_update = datetime.datetime.now() - capital_info['last_update']
+                    print(f"Dernière mise à jour: il y a {time_since_update.total_seconds()/60:.1f} minutes")
+                else:
+                    print("Dernière mise à jour: Jamais")
+                
+                # Afficher la différence
+                capital_difference = capital_info['available_capital'] - capital_info['static_capital']
+                difference_percent = (capital_difference / capital_info['static_capital']) * 100 if capital_info['static_capital'] > 0 else 0
+                print(f"Différence capital dynamique vs statique: {difference_percent:+.1f}%")
+                
+                # Afficher la méthode de sizing
+                sizing_info = bot.money_manager.get_sizing_method_info()
+                print(f"Méthode de sizing: {sizing_info}")
+            elif cmd == 'update_capital':
+                print("Mise à jour forcée du capital en cours...")
+                success = bot.money_manager.force_capital_update()
+                if success:
+                    print("✅ Capital mis à jour avec succès")
+                    capital_info = bot.money_manager.get_capital_info()
+                    print(f"Nouveau capital disponible: {capital_info['available_capital']:.2f} {capital_info['capital_currency']}")
+                else:
+                    print("❌ Échec de la mise à jour du capital")
+            elif cmd == 'recommendations':
+                recommendations = bot.money_manager.get_position_recommendations()
+                print("\n=== RECOMMANDATIONS DE TAILLE DE POSITION ===")
+                dynamic_capital = bot.money_manager.get_dynamic_capital()
+                print(f"Capital total disponible: {dynamic_capital:.2f} EUR")
+                
+                for pair, rec in recommendations.items():
+                    if 'error' in rec:
+                        print(f"{pair}: Erreur - {rec['error']}")
+                    else:
+                        print(f"\n{pair}:")
+                        print(f"  Allocation: {rec['allocation_percent']:.1f}% ({rec['allocated_capital']:.2f} EUR)")
+                        print(f"  Taille recommandée: {rec['recommended_size']:.2f} EUR")
+                        print(f"  Taille maximale: {rec['max_size']:.2f} EUR")
             else:
                 print("Commande inconnue. Tapez 'quit' pour quitter.")
                 

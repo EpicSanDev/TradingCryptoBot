@@ -64,8 +64,8 @@ class AdvancedTradingBot:
                 self.futures_client = None
                 self.active_client = self.spot_client
             
-            # Initialiser les autres composants
-            self.money_manager = MoneyManager()
+            # Initialiser les autres composants avec le client Kraken
+            self.money_manager = MoneyManager(self.active_client)
             self.strategy = TradingStrategy(self.active_client)
             self.indicators = TechnicalIndicators()
             
@@ -478,6 +478,13 @@ class AdvancedTradingBot:
         logging.info(f"Profit/Perte total: {metrics['total_profit_loss']:.2f}")
         logging.info(f"Drawdown actuel: {metrics['current_drawdown']:.2f}%")
         logging.info(f"Ratio de Sharpe: {metrics['sharpe_ratio']:.2f}")
+        
+        # Afficher le statut du capital
+        self.money_manager.log_capital_status()
+        
+        # Afficher la méthode de sizing
+        sizing_info = self.money_manager.get_sizing_method_info()
+        logging.info(f"Méthode de sizing: {sizing_info}")
         
         # Afficher les positions ouvertes
         if self.positions:
