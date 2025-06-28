@@ -76,6 +76,10 @@ class Config:
     # === INTERVALLE DE VÉRIFICATION ===
     CHECK_INTERVAL = int(os.getenv('CHECK_INTERVAL', '5'))
     
+    # === CONFIGURATION INSTITUTIONNELLE ===
+    CLOSE_POSITIONS_ON_STOP = os.getenv('CLOSE_POSITIONS_ON_STOP', 'false').lower() == 'true'
+    MAX_POSITION_DAYS = int(os.getenv('MAX_POSITION_DAYS', '30'))  # Jours maximum pour tenir une position
+    
     # === CONFIGURATION PAR PAIRE ===
     PAIR_CONFIGS = json.loads(os.getenv('PAIR_CONFIGS', '{}'))
     
