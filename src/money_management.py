@@ -267,15 +267,18 @@ class MoneyManager:
         if not self.trade_history:
             return {
                 'total_trades': 0,
+                'winning_trades': 0,
+                'losing_trades': 0,
                 'win_rate': 0.0,
                 'total_profit_loss': 0.0,
                 'average_profit_loss': 0.0,
-                'max_drawdown': 0.0,
+                'current_drawdown': 0.0,
                 'sharpe_ratio': 0.0
             }
         
         total_trades = len(self.trade_history)
         winning_trades = sum(1 for t in self.trade_history if t.get('profit_loss', 0) > 0)
+        losing_trades = sum(1 for t in self.trade_history if t.get('profit_loss', 0) < 0)
         win_rate = (winning_trades / total_trades) * 100
         
         total_profit_loss = sum(t.get('profit_loss', 0) for t in self.trade_history)
@@ -291,6 +294,7 @@ class MoneyManager:
         return {
             'total_trades': total_trades,
             'winning_trades': winning_trades,
+            'losing_trades': losing_trades,
             'win_rate': win_rate,
             'total_profit_loss': total_profit_loss,
             'average_profit_loss': average_profit_loss,
