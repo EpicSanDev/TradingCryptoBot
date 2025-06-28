@@ -1,0 +1,26 @@
+
+=== RAPPORT DE BACKTEST ===
+Date: 2025-06-28 22:32:15
+
+RÉSUMÉ FINANCIER:
+- Capital initial: 100.00€
+- Capital final: 100.00€
+- Profit/Perte total: 0.00€
+- Rendement total: 0.00%
+- Drawdown maximum: 0.00%
+- Ratio de Sharpe: 0.00
+
+STATISTIQUES DES TRADES:
+- Nombre total de trades: 0
+- Trades gagnants: 0
+- Trades perdants: 0
+- Taux de réussite: 0.00%
+- Gain moyen: 0.00€
+- Perte moyenne: 0.00€
+- Facteur de profit: 0.00
+- Frais totaux: 0.00€
+
+ÉVALUATION:
+❌ Performance négative
+✅ Risque faible (drawdown < 5%)
+⚠️  Régularité à améliorer (<50% de réussite)
