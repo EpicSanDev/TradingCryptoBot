@@ -22,7 +22,18 @@ Usage:
 import argparse
 import sys
 import os
+import logging
 from datetime import datetime
+
+# Configuration du logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('trading_bot.log'),
+        logging.StreamHandler()
+    ]
+)
 
 # Ajouter le répertoire src au path
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))

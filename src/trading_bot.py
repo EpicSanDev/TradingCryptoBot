@@ -3,7 +3,7 @@ import schedule
 import logging
 from datetime import datetime
 from .config import Config
-from .kraken_client import KrakenClient
+from .advanced_kraken_client import AdvancedKrakenClient
 from .strategy import TradingStrategy
 
 # Configuration du logging
@@ -26,7 +26,7 @@ class TradingBot:
             Config.validate()
             
             # Initialiser les composants
-            self.kraken_client = KrakenClient()
+            self.kraken_client = AdvancedKrakenClient()
             self.strategy = TradingStrategy(self.kraken_client)
             
             # État du bot

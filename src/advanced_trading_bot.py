@@ -153,29 +153,46 @@ class AdvancedTradingBot:
     def run_trading_cycle(self, pair: str):
         """Exécuter un cycle de trading pour une paire spécifique"""
         try:
-            logging.info(f"--- Cycle de trading pour {pair} ---")
+            # Vérifier si on a suffisamment de fonds
+            if not self._check_sufficient_funds(pair):
+                logging.info(f"Cycle de trading ignoré pour {pair} - fonds insuffisants")
+                return
             
-            # Analyser le marché
+            # Analyser la paire
             analysis = self._analyze_pair(pair)
             if not analysis:
-                logging.warning(f"Impossible d'analyser {pair}")
-                return pair
+                return
             
             # Vérifier la gestion des risques
-            self._check_risk_management(pair, analysis)
+            risk_check = self._check_risk_management(pair, analysis)
+            if risk_check:
+                logging.info(f"Action de gestion des risques pour {pair}: {risk_check}")
+                return
             
-            # Prendre des décisions de trading
+            # Prendre les décisions de trading
             self._make_trading_decisions(pair, analysis)
             
-            # Mettre à jour les positions
-            self._update_positions(pair)
+        except Exception as e:
+            logging.error(f"Erreur dans le cycle de trading pour {pair}: {e}")
+    
+    def _check_sufficient_funds(self, pair: str) -> bool:
+        """Vérifier si le compte a suffisamment de fonds pour trader"""
+        try:
+            # Mettre à jour le solde du compte
+            self.money_manager.update_account_balance()
             
-            logging.info(f"--- Cycle terminé pour {pair} ---")
-            return pair
+            available_balance = self.money_manager.available_balance
+            min_order_value = 10.0  # Kraken minimum order value
+            
+            if available_balance < min_order_value:
+                logging.warning(f"Fonds insuffisants pour trader {pair}: {available_balance:.2f} EUR < {min_order_value} EUR minimum")
+                return False
+            
+            return True
             
         except Exception as e:
-            logging.error(f"Erreur lors du cycle de trading pour {pair}: {e}")
-            return pair
+            logging.error(f"Erreur lors de la vérification des fonds: {e}")
+            return False
     
     def _analyze_pair(self, pair: str) -> Optional[Dict]:
         """Analyser une paire de trading"""
@@ -223,6 +240,9 @@ class AdvancedTradingBot:
             if action == 'SELL':
                 logging.warning(f"Stop-loss/Take-profit atteint pour {pair} - Vente forcée")
                 self._execute_forced_sell(pair, position, analysis)
+                return 'FORCED_SELL'
+        
+        return None
     
     def _check_position_risk(self, pair: str, position: Dict, current_price: float) -> Optional[str]:
         """Vérifier le risque d'une position"""
@@ -356,10 +376,34 @@ class AdvancedTradingBot:
             position_size = self._calculate_position_size(pair, analysis)
             current_price = analysis['current_price']
             
+            # Vérifier la taille minimale de l'ordre
+            position_value = position_size * current_price
+            min_order_value = 10.0  # Kraken minimum order value in EUR
+            
+            if position_value < min_order_value:
+                logging.warning(f"Position trop petite pour {pair}: {position_value:.2f} EUR < {min_order_value} EUR minimum")
+                logging.warning(f"Taille calculée: {position_size:.8f}, Prix: {current_price}")
+                
+                # Essayer d'ajuster à la taille minimale si on a assez de fonds
+                available_balance = self.money_manager.available_balance
+                if available_balance >= min_order_value:
+                    adjusted_size = min_order_value / current_price
+                    logging.info(f"Ajustement à la taille minimale: {adjusted_size:.8f} {pair}")
+                    position_size = adjusted_size
+                    position_value = min_order_value
+                else:
+                    logging.error(f"Fonds insuffisants pour ordre minimal: {available_balance:.2f} EUR < {min_order_value} EUR")
+                    return
+            
             # Déterminer le levier pour les futures
             leverage = None
             if self.trading_mode == 'futures':
                 leverage = Config.get_leverage_for_pair(pair)
+            
+            # Vérifier les limites de risque une dernière fois
+            if not self.money_manager.check_risk_limits(pair, position_size):
+                logging.warning(f"Limites de risque dépassées pour {pair}")
+                return
             
             # Placer l'ordre
             order = self.active_client.place_market_order(
@@ -385,9 +429,10 @@ class AdvancedTradingBot:
                 self._record_trade(pair, 'buy', position_size, current_price, 
                                  current_price, leverage)
                 
-                logging.info(f"Ordre d'achat exécuté pour {pair}: {position_size} @ {current_price}")
+                logging.info(f"Ordre d'achat exécuté pour {pair}: {position_size:.8f} @ {current_price}")
             else:
                 logging.error(f"Échec de l'ordre d'achat pour {pair}")
+                logging.error(f"Détails: taille={position_size:.8f}, valeur={position_value:.2f} EUR, prix={current_price}")
                 
         except Exception as e:
             logging.error(f"Erreur lors de l'exécution de l'achat pour {pair}: {e}")

@@ -140,25 +140,36 @@ class MoneyManager:
             stop_loss_price: Prix du stop-loss
             
         Returns:
-            Taille de position en unités de base
+            Taille de position en unités de base (ex: ETH pour XETHZEUR)
         """
         method = Config.POSITION_SIZING_METHOD.lower()
         
         if method == 'fixed':
-            return self._fixed_position_sizing(pair)
+            return self._fixed_position_sizing(pair, current_price)
         elif method == 'kelly':
             return self._kelly_position_sizing(pair, signal_strength, current_price, stop_loss_price)
         elif method == 'martingale':
-            return self._martingale_position_sizing(pair)
+            return self._martingale_position_sizing(pair, current_price)
         else:
-            return self._fixed_position_sizing(pair)
+            return self._fixed_position_sizing(pair, current_price)
     
-    def _fixed_position_sizing(self, pair: str) -> float:
+    def _fixed_position_sizing(self, pair: str, current_price: float) -> float:
         """Taille de position fixe basée sur l'allocation et le capital effectif"""
         effective_capital = self.get_effective_capital()
         allocation = Config.get_allocation_for_pair(pair)
         position_value = (effective_capital * allocation / 100) * Config.FIXED_POSITION_SIZE
-        return position_value
+        
+        # Convertir la valeur en volume
+        volume = position_value / current_price if current_price > 0 else 0
+        
+        # Vérifier que la position ne dépasse pas les fonds disponibles
+        available_balance = self.available_balance
+        if position_value > available_balance:
+            # Ajuster à la limite des fonds disponibles
+            position_value = available_balance * 0.95  # Laisser 5% de marge
+            volume = position_value / current_price if current_price > 0 else 0
+        
+        return volume
     
     def _kelly_position_sizing(self, pair: str, signal_strength: float, 
                              current_price: float, stop_loss_price: float) -> float:
@@ -184,12 +195,22 @@ class MoneyManager:
         kelly_fraction *= Config.KELLY_FRACTION
         
         # Limiter à la taille maximale autorisée
-        max_size = self._get_max_position_size(pair)
-        kelly_size = max_size * max(0, min(1, kelly_fraction))
+        max_value = self._get_max_position_value(pair)
+        kelly_value = max_value * max(0, min(1, kelly_fraction))
         
-        return kelly_size
+        # Convertir en volume
+        volume = kelly_value / current_price if current_price > 0 else 0
+        
+        # Vérifier que la position ne dépasse pas les fonds disponibles
+        available_balance = self.available_balance
+        if kelly_value > available_balance:
+            # Ajuster à la limite des fonds disponibles
+            kelly_value = available_balance * 0.95  # Laisser 5% de marge
+            volume = kelly_value / current_price if current_price > 0 else 0
+        
+        return volume
     
-    def _martingale_position_sizing(self, pair: str) -> float:
+    def _martingale_position_sizing(self, pair: str, current_price: float) -> float:
         """Sizing Martingale - augmente après les pertes"""
         recent_trades = self._get_recent_trades(pair, 5)
         consecutive_losses = 0
@@ -200,22 +221,35 @@ class MoneyManager:
             else:
                 break
         
-        base_size = self._get_max_position_size(pair)
+        base_value = self._get_max_position_value(pair)
         multiplier = 1.5 ** consecutive_losses  # Augmente de 50% par perte consécutive
+        max_multiplier = 3  # Limite à 3x
         
-        return min(base_size * multiplier, base_size * 3)  # Limite à 3x
+        position_value = min(base_value * multiplier, base_value * max_multiplier)
+        
+        # Convertir en volume
+        volume = position_value / current_price if current_price > 0 else 0
+        
+        # Vérifier que la position ne dépasse pas les fonds disponibles
+        available_balance = self.available_balance
+        if position_value > available_balance:
+            # Ajuster à la limite des fonds disponibles
+            position_value = available_balance * 0.95  # Laisser 5% de marge
+            volume = position_value / current_price if current_price > 0 else 0
+        
+        return volume
     
-    def _get_max_position_size(self, pair: str) -> float:
-        """Obtenir la taille maximale de position pour une paire basée sur le capital effectif"""
+    def _get_max_position_value(self, pair: str) -> float:
+        """Obtenir la valeur maximale de position pour une paire basée sur le capital effectif"""
         effective_capital = self.get_effective_capital()
         allocation = Config.get_allocation_for_pair(pair)
         max_risk_amount = effective_capital * (Config.MAX_RISK_PER_TRADE / 100)
         
         # Ajuster selon le levier pour les futures
         leverage = Config.get_leverage_for_pair(pair)
-        max_size = max_risk_amount * leverage
+        max_value = max_risk_amount * leverage
         
-        return max_size
+        return max_value
     
     def _get_historical_win_rate(self, pair: str) -> float:
         """Obtenir le taux de réussite historique pour une paire"""
@@ -236,12 +270,30 @@ class MoneyManager:
         """
         Vérifier si une position respecte les limites de risque
         
+        Args:
+            pair: Paire de trading
+            position_size: Taille de position en volume (ex: ETH)
+            
         Returns:
             True si la position est acceptable
         """
+        # Obtenir le prix actuel pour calculer la valeur
+        if not self.kraken_client:
+            return True  # Si pas de client, on ne peut pas vérifier
+        
+        current_price = self.kraken_client.get_current_price(pair)
+        if current_price is None:
+            return False
+        
+        position_value = position_size * current_price
+        
         # Vérifier le risque par trade
-        max_risk = self._get_max_position_size(pair)
-        if position_size > max_risk:
+        max_risk_value = self._get_max_position_value(pair)
+        if position_value > max_risk_value:
+            return False
+        
+        # Vérifier que la position ne dépasse pas les fonds disponibles
+        if position_value > self.available_balance:
             return False
         
         # Vérifier le drawdown
@@ -249,12 +301,12 @@ class MoneyManager:
             return False
         
         # Vérifier le risque corrélé
-        if self._check_correlated_risk(pair, position_size):
+        if self._check_correlated_risk(pair, position_value):
             return False
         
         return True
     
-    def _check_correlated_risk(self, pair: str, position_size: float) -> bool:
+    def _check_correlated_risk(self, pair: str, position_value: float) -> bool:
         """Vérifier le risque corrélé avec d'autres positions"""
         # Calculer le risque total des paires corrélées
         correlated_pairs = self._get_correlated_pairs(pair)
@@ -262,7 +314,7 @@ class MoneyManager:
             self.position_sizes.get(cp, 0) for cp in correlated_pairs
         )
         
-        total_correlated_risk += position_size
+        total_correlated_risk += position_value
         effective_capital = self.get_effective_capital()
         max_correlated_risk = effective_capital * (Config.MAX_CORRELATED_RISK / 100)
         
